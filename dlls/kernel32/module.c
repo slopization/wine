@@ -262,7 +262,8 @@ BOOL WINAPI GetBinaryTypeA( LPCSTR lpApplicationName, LPDWORD lpBinaryType )
     return GetBinaryTypeW(NtCurrentTeb()->StaticUnicodeString.Buffer, lpBinaryType);
 }
 
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(__arm64ec__)
+/* workaround for tpshell */
 static BOOL needs_int3_hack(void)
 {
     static volatile char cache = -1;
@@ -270,17 +271,39 @@ static BOOL needs_int3_hack(void)
     if (ret == -1)
     {
         const WCHAR *p, *name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        WCHAR env[8];
+
         if ((p = wcsrchr(name, '/')))
             name = p + 1;
         if ((p = wcsrchr(name, '\\')))
             name = p + 1;
         
-        ret = (!wcsicmp(name, L"Endfield.exe"));
+        ret = ((!wcsicmp(name, L"Endfield.exe")) ||
+               (!wcsicmp(name, L"EM-Win64-Shipping.exe")));
+        
+        if (GetEnvironmentVariableW(L"PROTON_ENABLE_INT3_HACK", env, ARRAY_SIZE(env)) && _wtoi(env) == 1)
+            ret = TRUE;
+        
         cache = ret;
     }
     return ret;
 }
 
+#if defined(__arm64ec__)
+/* An ARM64EC image cannot contain x86 machine code, so hand back a buffer holding
+ * the same int3 (0xCC) bytes instead of a code stub.  The real Windows stub is
+ * four int3s and is never executed by the protector -- doing so would trap -- so
+ * tpshell is reading these bytes, not running them.
+ * If testing shows an executable mapping is also required, allocate this with
+ * VirtualAlloc( NULL, sizeof(int3_stub), MEM_COMMIT, PAGE_EXECUTE_READWRITE ) on
+ * first use and fill it with 0xCC. */
+static unsigned char int3_stub[16] =
+{
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+};
+#define INT3_STUB_ADDR ((FARPROC)int3_stub)
+#else
 static void __attribute__((naked)) int3_stub( void )
 {
     asm("int3\t\n"
@@ -288,6 +311,8 @@ static void __attribute__((naked)) int3_stub( void )
         "int3\t\n"
         "int3\t\n");
 }
+#define INT3_STUB_ADDR ((FARPROC)&int3_stub)
+#endif
 #endif
 
 /***********************************************************************
@@ -313,11 +338,11 @@ FARPROC get_proc_address( HMODULE hModule, LPCSTR function )
     {
         ANSI_STRING     str;
 
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(__arm64ec__)
         if (needs_int3_hack() && (strcmp( function, "KiUserApcDispatcher" ) == 0 || strcmp( function, "KiUserCallbackDispatcher" ) == 0))
         {
             FIXME( "HACK: returning int3 stub instead of %s\n", function );
-            return (FARPROC)&int3_stub;
+            return INT3_STUB_ADDR;
         }
 #endif
 
