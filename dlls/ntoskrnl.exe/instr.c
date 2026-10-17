@@ -945,4 +945,132 @@ LONG CALLBACK vectored_handler( EXCEPTION_POINTERS *ptrs )
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-#endif  /* __x86_64__ */
+#elif defined(__aarch64__) || defined(__arm64ec__)  /* __i386__ */
+
+WINE_DEFAULT_DEBUG_CHANNEL(int);
+
+/* Kernel-mode view of the shared user data page. Wine maps the page at 0x7ffe0000
+ * only, which lies outside the usable user address space on 64-bit targets, so
+ * accesses through the kernel alias have to be emulated instead of mapped.
+ * Keep in sync with dlls/ntdll/unix/virtual.c. */
+static const BYTE *wine_user_shared_data = (BYTE *)0x7ffe0000;
+static const BYTE *user_shared_data      = (BYTE *)0xfffff78000000000;
+
+/* Load/store register (immediate, unsigned offset)
+ *   size(2) 111 V 01 opc(2) imm12(12) Rn(5) Rt(5)  */
+#define A64_LDST_UOFF_MASK  0x3b000000u
+#define A64_LDST_UOFF_VALUE 0x39000000u
+/* Load/store register (immediate, unscaled / pre- / post-indexed)
+ *   size(2) 111 V 00 opc(2) imm9(9) op2(2) Rn(5) Rt(5)  */
+#define A64_LDST_IMM_MASK   0x3b000000u
+#define A64_LDST_IMM_VALUE  0x38000000u
+
+#define A64_OP2_UNSCALED   0
+#define A64_OP2_POSTINDEX  1
+#define A64_OP2_UNPRIVILEGED 2
+#define A64_OP2_PREINDEX   3
+
+/* read a value from Wine's own copy, applying the load's extension rule */
+static DWORD64 load_shared_data( SIZE_T offset, unsigned int size, unsigned int opc )
+{
+    DWORD64 value = 0;
+
+    memcpy( &value, wine_user_shared_data + offset, size );
+    if (opc < 2) return value;           /* plain or zero-extended load */
+    switch (size)
+    {
+    case 1:  return (DWORD64)(INT64)(INT8)value;
+    case 2:  return (DWORD64)(INT64)(INT16)value;
+    case 4:  return (DWORD64)(INT64)(INT32)value;
+    default: return value;
+    }
+}
+
+/* Emulate the load or store that touched the kernel shared data alias.
+ * Returns TRUE when the instruction was understood and executed. */
+static BOOL emulate_shared_data_access( CONTEXT *context, ULONG64 fault_addr )
+{
+    const ULONG *code = (const ULONG *)(ULONG_PTR)context->Pc;
+    SIZE_T offset = fault_addr - (ULONG_PTR)user_shared_data;
+    unsigned int insn, size, opc, rn, rt, op2 = A64_OP2_UNSCALED;
+    DWORD64 base, value;
+    LONG64 disp;
+
+    if (offset >= KSHARED_USER_DATA_PAGE_SIZE) return FALSE;
+
+    insn = *code;
+    if (insn & (1u << 26)) return FALSE;             /* vector forms are not used here */
+
+    if ((insn & A64_LDST_UOFF_MASK) == A64_LDST_UOFF_VALUE)
+    {
+        size = insn >> 30;
+        opc  = (insn >> 22) & 3;
+        rn   = (insn >> 5) & 0x1f;
+        rt   = insn & 0x1f;
+        disp = ((insn >> 10) & 0xfff) << size;
+    }
+    else if ((insn & A64_LDST_IMM_MASK) == A64_LDST_IMM_VALUE)
+    {
+        op2 = (insn >> 10) & 3;
+        if (op2 == A64_OP2_UNPRIVILEGED) return FALSE;
+        size = insn >> 30;
+        opc  = (insn >> 22) & 3;
+        rn   = (insn >> 5) & 0x1f;
+        rt   = insn & 0x1f;
+        disp = (insn >> 12) & 0x1ff;
+        if (disp & 0x100) disp -= 0x200;             /* sign-extend imm9 */
+    }
+    else return FALSE;
+
+    if (opc == 2 && size == 3) return FALSE;         /* prefetch, no data transfer */
+    if (opc == 3) return FALSE;                      /* unused / reserved encoding */
+
+    base = (rn == 31) ? context->Sp : context->X[rn];
+
+    if (opc == 0)
+    {
+        value = (rt == 31) ? 0 : context->X[rt];
+        TRACE( "shared data store at offset %#Ix\n", offset );
+        memcpy( (BYTE *)wine_user_shared_data + offset, &value, ((SIZE_T)1) << size );
+    }
+    else
+    {
+        TRACE( "shared data load at offset %#Ix\n", offset );
+        value = load_shared_data( offset, ((SIZE_T)1) << size, opc );
+        if (rt != 31) context->X[rt] = value;
+    }
+
+    if (op2 == A64_OP2_POSTINDEX || op2 == A64_OP2_PREINDEX)
+    {
+        if (rn != 31) context->X[rn] = base + disp;
+    }
+
+    context->Pc += 4;
+    return TRUE;
+}
+
+/***********************************************************************
+ *           vectored_handler
+ *
+ * Vectored exception handler used to emulate accesses to the kernel-mode view of
+ * the shared user data page.
+ */
+LONG CALLBACK vectored_handler( EXCEPTION_POINTERS *ptrs )
+{
+    EXCEPTION_RECORD *record = ptrs->ExceptionRecord;
+    CONTEXT *context = ptrs->ContextRecord;
+
+    if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    if (record->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    if (record->ExceptionInformation[0] != EXCEPTION_READ_FAULT &&
+        record->ExceptionInformation[0] != EXCEPTION_WRITE_FAULT) return EXCEPTION_CONTINUE_SEARCH;
+
+    if (emulate_shared_data_access( context, record->ExceptionInformation[1] ))
+    {
+        TRACE( "next instruction pc=%Ix\n", context->Pc );
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+#endif  /* __aarch64__ || __arm64ec__ */
