@@ -270,20 +270,10 @@ static BOOL needs_int3_hack(void)
     BOOL ret = cache;
     if (ret == -1)
     {
-        const WCHAR *p, *name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
         WCHAR env[8];
 
-        if ((p = wcsrchr(name, '/')))
-            name = p + 1;
-        if ((p = wcsrchr(name, '\\')))
-            name = p + 1;
-        
-        ret = ((!wcsicmp(name, L"Endfield.exe")) ||
-               (!wcsicmp(name, L"EM-Win64-Shipping.exe")));
-        
-        if (GetEnvironmentVariableW(L"PROTON_ENABLE_INT3_HACK", env, ARRAY_SIZE(env)) && _wtoi(env) == 1)
-            ret = TRUE;
-        
+        ret = GetEnvironmentVariableW(L"PROTON_ENABLE_INT3_HACK", env, ARRAY_SIZE(env)) && _wtoi(env) == 1;
+
         cache = ret;
     }
     return ret;
