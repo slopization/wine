@@ -645,6 +645,22 @@ static void dump_wintrust_data(WINTRUST_DATA *data)
  * forever while holding the process heap lock.  Pretend everything these
  * processes ask about is signed.
  */
+static BOOL ace_registry_enabled( const char *value )
+{
+    HKEY key;
+    DWORD data, size = sizeof(data), type;
+    BOOL ret = FALSE;
+
+    if (!RegOpenKeyExA( HKEY_CURRENT_USER, "Software\\Wine\\WineAceCompat", 0, KEY_QUERY_VALUE, &key ))
+    {
+        if (!RegQueryValueExA( key, value, NULL, &type, (BYTE *)&data, &size ) &&
+            type == REG_DWORD && size == sizeof(data))
+            ret = data != 0;
+        RegCloseKey( key );
+    }
+    return ret;
+}
+
 static BOOL needs_wintrust_fixes(void)
 {
     static volatile int cache = -1;
@@ -652,8 +668,9 @@ static BOOL needs_wintrust_fixes(void)
 
     if (cache == -1)
     {
-        cache = GetEnvironmentVariableW( L"PROTON_ENABLE_WINTRUST_HACK", env, ARRAY_SIZE(env) ) &&
-                _wtoi( env ) == 1;
+        cache = (GetEnvironmentVariableW( L"PROTON_ENABLE_WINTRUST_HACK", env, ARRAY_SIZE(env) ) &&
+                 _wtoi( env ) == 1) ||
+                ace_registry_enabled( "SkipWinVerifyTrust" );
     }
     return cache;
 }
