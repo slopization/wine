@@ -366,7 +366,7 @@
 @ stdcall IoCreateDriver(ptr ptr)
 @ stdcall IoCreateFileEx(ptr long ptr ptr ptr long long long long ptr long long ptr long ptr)
 @ stdcall IoCreateFile(ptr long ptr ptr ptr long long long long ptr long long ptr long)
-@ stub IoCreateFileSpecifyDeviceObjectHint
+@ stdcall IoCreateFileSpecifyDeviceObjectHint(ptr long ptr ptr ptr long long long long ptr long long ptr long ptr)
 @ stdcall IoCreateNotificationEvent(ptr ptr)
 @ stub IoCreateStreamFileObject
 @ stub IoCreateStreamFileObjectEx
@@ -401,7 +401,7 @@
 @ stdcall IoFreeWorkItem(ptr)
 @ stdcall IoGetAttachedDevice(ptr)
 @ stdcall IoGetAttachedDeviceReference(ptr)
-@ stub IoGetBaseFileSystemDeviceObject
+@ stdcall IoGetBaseFileSystemDeviceObject(ptr)
 @ stub IoGetBootDiskInformation
 @ stdcall IoGetConfigurationInformation()
 @ stdcall IoGetCurrentProcess()

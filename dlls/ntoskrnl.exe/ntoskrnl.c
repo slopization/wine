@@ -2000,8 +2000,37 @@ NTSTATUS FASTCALL IofCallDriver( DEVICE_OBJECT *device, IRP *irp )
  */
 PDEVICE_OBJECT WINAPI IoGetRelatedDeviceObject( PFILE_OBJECT obj )
 {
-    FIXME( "stub: %p\n", obj );
-    return NULL;
+    TRACE( "%p\n", obj );
+
+    if (!obj) return NULL;
+    if (obj->Vpb && obj->Vpb->DeviceObject) return obj->Vpb->DeviceObject;
+    return obj->DeviceObject;
+}
+
+
+/***********************************************************************
+ *           IoGetBaseFileSystemDeviceObject    (NTOSKRNL.EXE.@)
+ *
+ * Returns the device object at the bottom of the file system stack for the volume a
+ * file object lives on. Filter drivers use it to find the volume underneath them.
+ */
+PDEVICE_OBJECT WINAPI IoGetBaseFileSystemDeviceObject( PFILE_OBJECT obj )
+{
+    PDEVICE_OBJECT device;
+
+    TRACE( "%p\n", obj );
+
+    if (!obj) return NULL;
+
+    if (obj->Vpb && obj->Vpb->RealDevice)
+        device = obj->Vpb->RealDevice;
+    else if (obj->Vpb && obj->Vpb->DeviceObject)
+        device = obj->Vpb->DeviceObject;
+    else
+        device = obj->DeviceObject;
+
+    while (device && device->AttachedDevice) device = device->AttachedDevice;
+    return device;
 }
 
 static CONFIGURATION_INFORMATION configuration_information;
@@ -4337,6 +4366,25 @@ NTSTATUS WINAPI IoCreateFile(HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUT
     return IoCreateFileEx(handle, access, attr, io, alloc_size, attributes, sharing, disposition,
                           create_options, ea_buffer, ea_length, file_type, parameters, options, NULL);
 }
+
+/***********************************************************************
+ *           IoCreateFileSpecifyDeviceObjectHint   (NTOSKRNL.EXE.@)
+ *
+ * Same as IoCreateFile, with a hint naming the device to open the file on. Wine has a
+ * single file object model per handle, so the hint is accepted and the open is done the
+ * ordinary way; the caller still gets a usable file object.
+ */
+NTSTATUS WINAPI IoCreateFileSpecifyDeviceObjectHint( HANDLE *handle, ACCESS_MASK access,
+        OBJECT_ATTRIBUTES *attr, IO_STATUS_BLOCK *io, LARGE_INTEGER *alloc_size,
+        ULONG attributes, ULONG sharing, ULONG disposition, ULONG create_options,
+        void *ea_buffer, ULONG ea_length, CREATE_FILE_TYPE file_type, void *parameters,
+        ULONG options, DEVICE_OBJECT *device )
+{
+    FIXME( ": semi-stub %p\n", device );
+    return NtCreateFile( handle, access, attr, io, alloc_size, attributes, sharing,
+                         disposition, create_options, ea_buffer, ea_length );
+}
+
 
 /**************************************************************************
  *		__chkstk (NTOSKRNL.@)
