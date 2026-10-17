@@ -30,6 +30,7 @@
 #include "winerror.h"
 #include "windef.h"
 #include "winbase.h"
+#include "winreg.h"
 #include "winternl.h"
 #include "kernel_private.h"
 #include "psapi.h"
@@ -264,6 +265,22 @@ BOOL WINAPI GetBinaryTypeA( LPCSTR lpApplicationName, LPDWORD lpBinaryType )
 
 #if defined(__x86_64__) || defined(__arm64ec__)
 /* workaround for tpshell */
+static BOOL ace_registry_enabled( const char *value )
+{
+    HKEY key;
+    DWORD data, size = sizeof(data), type;
+    BOOL ret = FALSE;
+
+    if (!RegOpenKeyExA( HKEY_CURRENT_USER, "Software\\Wine\\WineAceCompat", 0, KEY_QUERY_VALUE, &key ))
+    {
+        if (!RegQueryValueExA( key, value, NULL, &type, (BYTE *)&data, &size ) &&
+            type == REG_DWORD && size == sizeof(data))
+            ret = data != 0;
+        RegCloseKey( key );
+    }
+    return ret;
+}
+
 static BOOL needs_int3_hack(void)
 {
     static volatile char cache = -1;
@@ -272,7 +289,8 @@ static BOOL needs_int3_hack(void)
     {
         WCHAR env[8];
 
-        ret = GetEnvironmentVariableW(L"PROTON_ENABLE_INT3_HACK", env, ARRAY_SIZE(env)) && _wtoi(env) == 1;
+        ret = (GetEnvironmentVariableW(L"PROTON_ENABLE_INT3_HACK", env, ARRAY_SIZE(env)) && _wtoi(env) == 1) ||
+              ace_registry_enabled( "Int3DispatcherStub" );
 
         cache = ret;
     }
