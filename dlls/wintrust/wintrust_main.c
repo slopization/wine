@@ -18,6 +18,8 @@
  */
 
 #include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -637,6 +639,25 @@ static void dump_wintrust_data(WINTRUST_DATA *data)
     }
 }
 
+/* Some anti-cheat protected games verify their own payloads through
+ * WinVerifyTrust.  Wine's Softpub provider cannot decode the Authenticode
+ * SpcIndirectDataContent yet, so the check fails and the game retries it
+ * forever while holding the process heap lock.  Pretend everything these
+ * processes ask about is signed.
+ */
+static BOOL needs_wintrust_fixes(void)
+{
+    static volatile int cache = -1;
+    WCHAR env[8];
+
+    if (cache == -1)
+    {
+        cache = GetEnvironmentVariableW( L"PROTON_ENABLE_WINTRUST_HACK", env, ARRAY_SIZE(env) ) &&
+                _wtoi( env ) == 1;
+    }
+    return cache;
+}
+
 /***********************************************************************
  *		WinVerifyTrust (WINTRUST.@)
  *
@@ -668,6 +689,13 @@ LONG WINAPI WinVerifyTrust( HWND hwnd, GUID *ActionID, LPVOID ActionData )
     WINTRUST_DATA *actionData = ActionData;
 
     TRACE("(%p, %s, %p)\n", hwnd, debugstr_guid(ActionID), ActionData);
+
+    if (needs_wintrust_fixes())
+    {
+        FIXME("HACK: returning success for %s\n", debugstr_guid(ActionID));
+        return ERROR_SUCCESS;
+    }
+
     dump_wintrust_data(ActionData);
 
     /* Support for known old-style callers: */
