@@ -121,5 +121,10 @@ struct wine_device
     DEVICE_OBJECT device_obj;
     DEVICE_RELATIONS *children;
     HKEY dyn_data_key;
+    /* Every device ntoskrnl creates is linked here so that a device owned by a builtin
+     * driver (for example mountmgr's \Device\HarddiskVolumeN) can be found again from
+     * kernel code, which has no name lookup of its own. */
+    struct wine_device *next_all;
+    BOOLEAN is_volume;
 };
 #endif

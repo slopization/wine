@@ -180,6 +180,61 @@ void *alloc_kernel_object( POBJECT_TYPE type, HANDLE handle, SIZE_T size, LONG r
 
 DECLARE_CRITICAL_SECTION(obref_cs);
 
+/* Devices created through IoCreateDevice, so kernel code can look one up by kind.
+ * Windows resolves these through the object namespace; Wine's kernel side has no
+ * equivalent lookup, and IoGetDeviceObjectPointer is only a stub. */
+static struct wine_device *all_devices;
+DECLARE_CRITICAL_SECTION(device_list_cs);
+
+static BOOLEAN device_name_is_volume( const UNICODE_STRING *name )
+{
+    static const WCHAR prefix[] = {'\\','D','e','v','i','c','e','\\','H','a','r','d','d','i','s','k','V','o','l','u','m','e'};
+
+    if (!name || !name->Buffer || name->Length < sizeof(prefix)) return FALSE;
+    return !memcmp( name->Buffer, prefix, sizeof(prefix) );
+}
+
+static void register_device( struct wine_device *device, const UNICODE_STRING *name )
+{
+    device->is_volume = device_name_is_volume( name );
+    EnterCriticalSection( &device_list_cs );
+    device->next_all = all_devices;
+    all_devices = device;
+    LeaveCriticalSection( &device_list_cs );
+}
+
+static void unregister_device( struct wine_device *device )
+{
+    struct wine_device **prev;
+
+    EnterCriticalSection( &device_list_cs );
+    for (prev = &all_devices; *prev; prev = &(*prev)->next_all)
+    {
+        if (*prev != device) continue;
+        *prev = device->next_all;
+        break;
+    }
+    LeaveCriticalSection( &device_list_cs );
+}
+
+/* The volume a kernel file object lives on. Returns the first volume device a builtin
+ * driver created, which in a Wine prefix is mountmgr's \Device\HarddiskVolumeN. */
+static DEVICE_OBJECT *find_volume_device(void)
+{
+    struct wine_device *device;
+    DEVICE_OBJECT *ret = NULL;
+
+    EnterCriticalSection( &device_list_cs );
+    for (device = all_devices; device; device = device->next_all)
+    {
+        if (!device->is_volume) continue;
+        ret = &device->device_obj;
+        break;
+    }
+    LeaveCriticalSection( &device_list_cs );
+    return ret;
+}
+
 /***********************************************************************
  *           ObDereferenceObject   (NTOSKRNL.EXE.@)
  */
@@ -413,12 +468,81 @@ static struct _OBJECT_TYPE file_type = {
 
 POBJECT_TYPE IoFileObjectType = &file_type;
 
+static VPB file_volume_vpb;
+
+/* Wine's kernel objects are per-process: a device created by mountmgr lives in the
+ * winedevice process that hosts mountmgr, so a driver in another winedevice process
+ * cannot see it. Windows has one object namespace for the whole system, and a file
+ * object always points at the device its file lives on, so stand in a local volume
+ * device object when the real one is not visible in this process. */
+static DEVICE_OBJECT *local_volume_device;
+
+static NTSTATUS WINAPI volume_stub_dispatch( DEVICE_OBJECT *device, IRP *irp )
+{
+    FIXME( "device %p irp %p: no volume implementation\n", device, irp );
+    return STATUS_INVALID_DEVICE_REQUEST;
+}
+
+static DEVICE_OBJECT *get_local_volume_device(void)
+{
+    static DRIVER_OBJECT volume_driver;
+    unsigned int i;
+
+    if (local_volume_device) return local_volume_device;
+    if (!(local_volume_device = alloc_kernel_object( IoDeviceObjectType, NULL,
+                                                     sizeof(DEVICE_OBJECT), 1 )))
+        return NULL;
+
+    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
+        volume_driver.MajorFunction[i] = volume_stub_dispatch;
+    volume_driver.DriverStart = (void *)volume_stub_dispatch;
+
+    local_volume_device->Type            = IO_TYPE_DEVICE;
+    local_volume_device->Size            = sizeof(DEVICE_OBJECT);
+    local_volume_device->DriverObject    = &volume_driver;
+    local_volume_device->StackSize       = 1;
+    local_volume_device->DeviceType      = FILE_DEVICE_DISK_FILE_SYSTEM;
+    return local_volume_device;
+}
+
+static PVPB get_file_volume_vpb( DEVICE_OBJECT *volume )
+{
+    if (file_volume_vpb.DeviceObject != volume)
+    {
+        memset( &file_volume_vpb, 0, sizeof(file_volume_vpb) );
+        file_volume_vpb.Type           = IO_TYPE_VPB;
+        file_volume_vpb.Size           = sizeof(file_volume_vpb);
+        file_volume_vpb.DeviceObject   = volume;
+        file_volume_vpb.RealDevice     = volume;
+        file_volume_vpb.ReferenceCount = 1;
+    }
+    return &file_volume_vpb;
+}
+
 static void *create_file_object( HANDLE handle )
 {
     FILE_OBJECT *file;
+    DEVICE_OBJECT *volume;
+
     if (!(file = alloc_kernel_object( IoFileObjectType, handle, sizeof(*file), 0 ))) return NULL;
-    file->Type = 5;  /* MSDN */
+    file->Type = IO_TYPE_FILE;
     file->Size = sizeof(*file);
+
+    /* A real FILE_OBJECT is always associated with the device it lives on, and
+     * IoGetBaseFileSystemDeviceObject is defined in terms of that association.
+     * ACE-CORE opens its own image, inspects the resulting file object, and will not
+     * continue while the association is missing. */
+    if ((volume = find_volume_device()))
+        TRACE( "file object for handle %p uses volume device %p\n", handle, volume );
+    else if ((volume = get_local_volume_device()))
+        TRACE( "file object for handle %p uses local volume device %p\n", handle, volume );
+
+    if (volume)
+    {
+        file->DeviceObject = volume;
+        file->Vpb          = get_file_volume_vpb( volume );
+    }
+    else WARN( "no volume device available for handle %p\n", handle );
     return file;
 }
 
@@ -1688,6 +1812,8 @@ NTSTATUS WINAPI IoCreateDevice( DRIVER_OBJECT *driver, ULONG ext_size,
     device->NextDevice   = driver->DeviceObject;
     driver->DeviceObject = device;
 
+    register_device( wine_device, name );
+
     *ret_device = device;
     return STATUS_SUCCESS;
 }
@@ -1719,6 +1845,7 @@ void WINAPI IoDeleteDevice( DEVICE_OBJECT *device )
 
         while (*prev && *prev != device) prev = &(*prev)->NextDevice;
         if (*prev) *prev = (*prev)->NextDevice;
+        unregister_device( wine_device );
         if ((children = wine_device->children))
         {
             for (i = 0; i < children->Count; ++i)
