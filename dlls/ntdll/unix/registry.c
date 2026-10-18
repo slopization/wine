@@ -741,10 +741,20 @@ NTSTATUS WINAPI NtQueryValueKey( HANDLE handle, const UNICODE_STRING *name,
     unsigned int ret;
     UCHAR *data_ptr;
     unsigned int fixed_size, min_size;
+    UNICODE_STRING query_name;
 
     TRACE( "(%p,%s,%d,%p,%d)\n", handle, debugstr_us(name), info_class, info, length );
 
     if (name->Length > MAX_VALUE_LENGTH) return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    /* Registry value queries ignore trailing terminators in a counted name.
+     * Keep embedded NULs and the caller's descriptor/buffer unchanged. Do not
+     * change the existing handling of malformed odd-byte lengths. */
+    query_name = *name;
+    if (!(query_name.Length % sizeof(WCHAR)) && query_name.Buffer)
+        while (query_name.Length && !query_name.Buffer[query_name.Length / sizeof(WCHAR) - 1])
+            query_name.Length -= sizeof(WCHAR);
+    name = &query_name;
 
     /* compute the length we want to retrieve */
     switch(info_class)
