@@ -114,11 +114,11 @@ index f2b6ac92402..1d28616cb44 100644
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send request code\n" );
 +    }
-+    ret = recv(sock_fd, &net_data_format, sizeof(net_data_format), 0);
++    ret = recv(sock_fd, (char *)&net_data_format, sizeof(net_data_format), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to receive Android clipboard data format\n" );
 +    }
-+    ret = recv(sock_fd, &net_data_size, sizeof(net_data_size), 0);
++    ret = recv(sock_fd, (char *)&net_data_size, sizeof(net_data_size), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to receive Android clipboard data size\n" );
 +    }
