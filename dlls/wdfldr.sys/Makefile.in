@@ -1,0 +1,8 @@
+MODULE = wdfldr.sys
+IMPORTS = ntoskrnl ntdll
+
+EXTRADLLFLAGS = -Wl,--subsystem,native
+
+SOURCES = \
+	main.c \
+	wdfldr.sys.spec
