@@ -49,17 +49,17 @@ index f2b6ac92402..1d28616cb44 100644
 +    net_requestcode = htonl(clipboard_data.request_code);
 +    net_data_format = htonl(clipboard_data.format);
 +    net_data_size = htonl(clipboard_data.size);
-+    ret = send(sock_fd, &net_requestcode, sizeof(net_requestcode), 0);
++    ret = send(sock_fd, (const char *)&net_requestcode, sizeof(net_requestcode), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send request code\n" );
 +        return 0;
 +    }
-+    ret = send(sock_fd, &net_data_format, sizeof(net_data_format), 0);
++    ret = send(sock_fd, (const char *)&net_data_format, sizeof(net_data_format), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send Windows clipboard data format\n" );
 +        return 0;
 +    }
-+    ret = send(sock_fd, &net_data_size, sizeof(net_data_size), 0);
++    ret = send(sock_fd, (const char *)&net_data_size, sizeof(net_data_size), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send Windows clipboard data size\n" );
 +        return 0;
@@ -110,7 +110,7 @@ index f2b6ac92402..1d28616cb44 100644
 +    clipboard_data.request_code = 3;
 +    net_requestcode = htonl(clipboard_data.request_code);
 +
-+    ret = send(sock_fd, &net_requestcode, sizeof(net_requestcode), 0);
++    ret = send(sock_fd, (const char *)&net_requestcode, sizeof(net_requestcode), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send request code\n" );
 +    }
