@@ -1,0 +1,6 @@
+@ stdcall DllInitialize(ptr)
+@ stdcall DllUnload()
+@ stdcall WdfVersionBind(ptr ptr ptr ptr)
+@ stdcall WdfVersionBindClass(ptr ptr ptr)
+@ stdcall WdfVersionUnbind(ptr ptr ptr)
+@ stdcall WdfVersionUnbindClass(ptr ptr ptr)
