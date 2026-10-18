@@ -42,12 +42,12 @@ index 738930e..94988b9 100644
 +    }
 +    int net_requestcode = htonl(message.request_code);
 +    int net_data_length = htonl(strlen(message.data));
-+    ret = send(sock_fd, &net_requestcode, sizeof(net_requestcode), 0);
++    ret = send(sock_fd, (const char *)&net_requestcode, sizeof(net_requestcode), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send request code to server\n" );
 +        return 0;
 +    }
-+    ret = send(sock_fd, &net_data_length, sizeof(net_data_length), 0);
++    ret = send(sock_fd, (const char *)&net_data_length, sizeof(net_data_length), 0);
 +    if (ret == SOCKET_ERROR) {
 +        TRACE( "Failed to send data length to server\n" );
 +        return 0;
